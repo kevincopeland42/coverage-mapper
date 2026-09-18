@@ -284,6 +284,16 @@ const MapBoundsTracker = ({ onBoundsChange }: MapBoundsTrackerProps) => {
 const CARRIERS = ['AT&T', 'Verizon', 'T-Mobile', 'UScellular', 'Other'] as const
 type Carrier = typeof CARRIERS[number]
 
+const normalizeCarrier = (value: unknown): Carrier => {
+  const carrier = String(value ?? '').trim().toLowerCase().replace(/[\s-]/g, '')
+
+  if (carrier === 'at&t' || carrier === 'att') return 'AT&T'
+  if (carrier === 'verizon') return 'Verizon'
+  if (carrier === 't-mobile' || carrier === 'tmobile') return 'T-Mobile'
+  if (carrier === 'uscellular' || carrier === 'uscell') return 'UScellular'
+  return 'Other'
+}
+
 // App version
 const APP_VERSION = '1.0.0'
 
@@ -693,7 +703,7 @@ function App() {
         status: pingResult.status,
         connection_type: connectionType,
         device_os: deviceInfo.reportedOS,
-        carrier: activeCarrier,
+        carrier: normalizeCarrier(activeCarrier),
         device_model: deviceInfo.model,
         session_id: sessionIdRef.current,
         app_version: APP_VERSION,
@@ -823,7 +833,7 @@ function App() {
             status: ping.status,
             connection_type: ping.connection_type,
             device_os: ping.device_os,
-            carrier: ping.carrier || 'Unknown',
+            carrier: normalizeCarrier(ping.carrier),
             device_model: ping.device_model || 'Unknown',
             created_at: ping.created_at,
             session_id: ping.session_id,
@@ -861,7 +871,7 @@ function App() {
           status: payload.new.status,
           connection_type: payload.new.connection_type,
           device_os: payload.new.device_os,
-          carrier: payload.new.carrier || 'Unknown',
+          carrier: normalizeCarrier(payload.new.carrier),
           device_model: payload.new.device_model || 'Unknown',
           created_at: payload.new.created_at,
           session_id: payload.new.session_id,
@@ -1054,7 +1064,7 @@ function App() {
     // Then filter based on carrier and status selections
     const filteredByCarrier = pingsToAnalyze.filter((ping) => {
       // Check carrier filter
-      if (!selectedCarrierFilters.has(ping.carrier as Carrier)) {
+      if (!selectedCarrierFilters.has(normalizeCarrier(ping.carrier))) {
         return false
       }
       // Check status filter - if no filters selected, show all
@@ -1174,7 +1184,7 @@ function App() {
     // Filter pings based on selected carriers and status
     const filteredPings = mapPings.filter((ping) => {
       // Check carrier filter
-      if (!selectedCarrierFilters.has(ping.carrier as Carrier)) {
+      if (!selectedCarrierFilters.has(normalizeCarrier(ping.carrier))) {
         return false
       }
       // Check status filter - if no filters selected, show all
