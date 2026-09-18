@@ -1380,17 +1380,19 @@ function App() {
                 style={{
                   padding: '8px 12px',
                   borderRadius: '4px',
-                  border: '1px solid #ccc',
+                  border: '1px solid #333',
                   fontSize: '14px',
-                  backgroundColor: 'white',
+                  backgroundColor: '#ffffff',
+                  color: '#000',
                   cursor: 'pointer',
+                  minWidth: '150px',
                 }}
               >
-                {CARRIERS.map((carrier) => (
-                  <option key={carrier} value={carrier}>
-                    {carrier}
-                  </option>
-                ))}
+                <option value="AT&T">AT&T</option>
+                <option value="Verizon">Verizon</option>
+                <option value="T-Mobile">T-Mobile</option>
+                <option value="UScellular">UScellular</option>
+                <option value="Other">Other</option>
               </select>
               <span style={{ fontSize: '12px', color: '#666' }}>
                 Active: <strong>{activeCarrier}</strong>
@@ -1888,17 +1890,18 @@ function App() {
                 marginLeft: '10px',
                 padding: '6px 10px',
                 borderRadius: '4px',
-                border: '1px solid #ccc',
+                border: '1px solid #333',
                 fontSize: '14px',
-                backgroundColor: 'white',
+                backgroundColor: '#ffffff',
+                color: '#000',
                 cursor: 'pointer',
               }}
             >
-              {CARRIERS.map((carrier) => (
-                <option key={carrier} value={carrier}>
-                  {carrier}
-                </option>
-              ))}
+              <option value="AT&T">AT&T</option>
+              <option value="Verizon">Verizon</option>
+              <option value="T-Mobile">T-Mobile</option>
+              <option value="UScellular">UScellular</option>
+              <option value="Other">Other</option>
             </select>
           </p>
         </div>
