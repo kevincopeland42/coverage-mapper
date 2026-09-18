@@ -27,6 +27,11 @@ interface PingResult {
   carrier: string
   device_model: string
   created_at?: string
+  session_id?: string
+  app_version?: string
+  test_endpoint?: string
+  browser_platform?: string
+  reported_os?: string
 }
 
 // Create custom icons for map markers
@@ -40,6 +45,14 @@ const createMarkerIcon = (status: string, latency_ms: number | null) => {
     iconSize: [16, 16],
     className: 'custom-marker',
   })
+}
+
+// Type for map bounds
+interface MapBounds {
+  north: number
+  south: number
+  east: number
+  west: number
 }
 
 // MapRecenter component - handles auto-fit bounds and recenter logic
@@ -219,46 +232,148 @@ const RecenterButton = ({ mapPings, location, containerRef, isFollowing, setIsFo
   return null
 }
 
+// MapBoundsTracker component - tracks visible map bounds for stats filtering
+interface MapBoundsTrackerProps {
+  onBoundsChange: (bounds: MapBounds | null) => void
+}
+
+const MapBoundsTracker = ({ onBoundsChange }: MapBoundsTrackerProps) => {
+  const map = useMap()
+  const lastBoundsRef = useRef<MapBounds | null>(null)
+
+  useEffect(() => {
+    if (!map) return
+
+    const handleMoveOrZoom = () => {
+      const bounds = map.getBounds()
+      const newBounds: MapBounds = {
+        north: bounds.getNorth(),
+        south: bounds.getSouth(),
+        east: bounds.getEast(),
+        west: bounds.getWest(),
+      }
+
+      // Only notify if bounds actually changed
+      if (!lastBoundsRef.current || 
+          lastBoundsRef.current.north !== newBounds.north ||
+          lastBoundsRef.current.south !== newBounds.south ||
+          lastBoundsRef.current.east !== newBounds.east ||
+          lastBoundsRef.current.west !== newBounds.west) {
+        lastBoundsRef.current = newBounds
+        onBoundsChange(newBounds)
+      }
+    }
+
+    // Listen to map pan and zoom events
+    map.on('moveend', handleMoveOrZoom)
+    map.on('zoomend', handleMoveOrZoom)
+    
+    // Get initial bounds
+    handleMoveOrZoom()
+
+    return () => {
+      map.off('moveend', handleMoveOrZoom)
+      map.off('zoomend', handleMoveOrZoom)
+    }
+  }, [map, onBoundsChange])
+
+  return null
+}
+
 // Carrier selection
 const CARRIERS = ['AT&T', 'Verizon', 'T-Mobile', 'UScellular', 'Other'] as const
 type Carrier = typeof CARRIERS[number]
 
-// Get device model from userAgent
-const getDeviceModel = (): string => {
-  const userAgent = navigator.userAgent
-  
-  // Extract device model from userAgent
-  let deviceModel = 'Unknown'
-  
-  // iPhone/iPad detection
-  if (/iPhone/.test(userAgent)) {
-    const match = userAgent.match(/iPhone\s(\d+,\d+)/) || userAgent.match(/iPhone OS (\d+)/)
-    deviceModel = 'iPhone'
-    if (match) {
-      const version = /iPhone OS (\d+)/.exec(userAgent)?.[1]
-      if (version) deviceModel += ` (iOS ${version})`
+// App version
+const APP_VERSION = '1.0.0'
+
+// Generate or retrieve session ID (randomized contributor ID)
+const getOrCreateSessionId = (): string => {
+  const SESSION_ID_KEY = 'coverage_mapper_session_id'
+  try {
+    let sessionId = localStorage.getItem(SESSION_ID_KEY)
+    if (!sessionId) {
+      // Generate a new session ID: random hex string
+      sessionId = 'session_' + Math.random().toString(36).substring(2, 15) + Date.now().toString(36)
+      localStorage.setItem(SESSION_ID_KEY, sessionId)
     }
+    return sessionId
+  } catch {
+    return 'session_' + Math.random().toString(36).substring(2, 15) + Date.now().toString(36)
+  }
+}
+
+// Get browser platform (WebKit, Gecko, Blink)
+const getBrowserPlatform = (): string => {
+  const userAgent = navigator.userAgent
+  if (/WebKit/.test(userAgent)) return 'WebKit'
+  if (/Gecko/.test(userAgent)) return 'Gecko'
+  if (/Blink/.test(userAgent)) return 'Blink'
+  if (/Trident/.test(userAgent)) return 'Trident'
+  return 'Unknown'
+}
+
+// Get detailed device info
+interface DeviceInfo {
+  model: string
+  reportedOS: string
+  browserPlatform: string
+}
+
+const getDetailedDeviceInfo = (): DeviceInfo => {
+  const userAgent = navigator.userAgent
+  let model = 'Unknown'
+  let reportedOS = 'Unknown'
+  const browserPlatform = getBrowserPlatform()
+
+  // Check for iPhone/iPad FIRST (before Mac check!)
+  if (/iPhone/.test(userAgent)) {
+    model = 'iPhone'
+    reportedOS = 'iOS'
+    const version = /iPhone OS (\d+)/.exec(userAgent)?.[1]
+    if (version) reportedOS = `iOS ${version}`
+  } else if (/iPad/.test(userAgent)) {
+    model = 'iPad'
+    reportedOS = 'iOS'
+    const version = /OS (\d+)/.exec(userAgent)?.[1]
+    if (version) reportedOS = `iOS ${version}`
   }
   // Android detection
   else if (/Android/.test(userAgent)) {
+    model = 'Android Device'
     const match = userAgent.match(/Android\s([\d.]+)/)
-    deviceModel = 'Android'
-    if (match) deviceModel += ` (${match[1]})`
+    reportedOS = match ? `Android ${match[1]}` : 'Android'
   }
-  // Chrome detection
+  // Windows
+  else if (/Windows/.test(userAgent)) {
+    model = 'Windows PC'
+    reportedOS = 'Windows'
+  }
+  // macOS (check AFTER iPhone/iPad!)
+  else if (/Mac/.test(userAgent) && !/iPhone/.test(userAgent) && !/iPad/.test(userAgent)) {
+    model = 'Mac'
+    reportedOS = 'macOS'
+  }
+  // Linux
+  else if (/Linux/.test(userAgent)) {
+    model = 'Linux Device'
+    reportedOS = 'Linux'
+  }
+  // Browser-only detection
   else if (/Chrome/.test(userAgent)) {
-    deviceModel = 'Chrome Browser'
+    model = 'Chrome Browser'
+  } else if (/Safari/.test(userAgent) && !/Chrome/.test(userAgent)) {
+    model = 'Safari Browser'
+  } else if (/Firefox/.test(userAgent)) {
+    model = 'Firefox Browser'
   }
-  // Safari detection
-  else if (/Safari/.test(userAgent) && !/Chrome/.test(userAgent)) {
-    deviceModel = 'Safari Browser'
-  }
-  // Firefox detection
-  else if (/Firefox/.test(userAgent)) {
-    deviceModel = 'Firefox Browser'
-  }
-  
-  return deviceModel
+
+  return { model, reportedOS, browserPlatform }
+}
+
+// Get device model from userAgent (backward compatible wrapper)
+const getDeviceModel = (): string => {
+  return getDetailedDeviceInfo().model
 }
 
 // Offline queue management
@@ -344,10 +459,12 @@ function App() {
       return 'Other'
     }
   })
-  const [selectedCarrierFilters, setSelectedCarrierFilters] = useState<Set<Carrier>>(new Set(CARRIERS))
+  const [selectedCarrierFilters, setSelectedCarrierFilters] = useState<Set<Carrier>>(new Set()) // Start with all carriers deselected
   const [selectedStatusFilters, setSelectedStatusFilters] = useState<Set<'HIGH' | 'TIMEOUT'>>(new Set())
   const [offlineQueueSize, setOfflineQueueSize] = useState(0) // Track offline queue size for UI
   const [isMapFollowing, setIsMapFollowing] = useState(false) // Track if map is in following mode
+  const [mapBounds, setMapBounds] = useState<MapBounds | null>(null) // Track visible map bounds for stats filtering
+  const [showMapPins, setShowMapPins] = useState(false) // Toggle to show/hide pins on map for performance
   
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const wakeLockRef = useRef<WakeLockSentinel | null>(null)
@@ -355,17 +472,12 @@ function App() {
   const latestCoordsRef = useRef<LocationData>(location) // Cache latest GPS coordinates
   const mapContainerRef = useRef<HTMLDivElement>(null) // Reference for map wrapper
   const deviceModelRef = useRef<string>(getDeviceModel()) // Cache device model
+  const deviceInfoRef = useRef<DeviceInfo>(getDetailedDeviceInfo()) // Cache detailed device info
+  const sessionIdRef = useRef<string>(getOrCreateSessionId()) // Cache session ID
 
-  // Get device OS
+  // Get device OS (legacy function for backward compatibility)
   const getDeviceOS = (): string => {
-    const userAgent = navigator.userAgent
-    if (userAgent.indexOf('Windows') > -1) return 'Windows'
-    if (userAgent.indexOf('Mac') > -1) return 'macOS'
-    if (userAgent.indexOf('Linux') > -1) return 'Linux'
-    if (userAgent.indexOf('Android') > -1) return 'Android'
-    if (userAgent.indexOf('iPhone') > -1 || userAgent.indexOf('iPad') > -1)
-      return 'iOS'
-    return 'Unknown'
+    return getDetailedDeviceInfo().reportedOS
   }
 
   // Get connection type
@@ -540,9 +652,9 @@ function App() {
       const freshLocation = await getFreshGPSCoordinates()
 
       // Perform ping and measure latency
-      const pingResult = await performPing()
+      const pingResult = await performPing('/')
       const connectionType = getConnectionType()
-      const deviceOS = getDeviceOS()
+      const deviceInfo = deviceInfoRef.current
 
       // Use fresh GPS coordinates for this ping
       const pingData: PingResult = {
@@ -552,9 +664,14 @@ function App() {
         latency_ms: pingResult.latency_ms,
         status: pingResult.status,
         connection_type: connectionType,
-        device_os: deviceOS,
+        device_os: deviceInfo.reportedOS,
         carrier: activeCarrier,
-        device_model: deviceModelRef.current,
+        device_model: deviceInfo.model,
+        session_id: sessionIdRef.current,
+        app_version: APP_VERSION,
+        test_endpoint: '/',
+        browser_platform: deviceInfo.browserPlatform,
+        reported_os: deviceInfo.reportedOS,
       }
 
       // Always add ping to map state for immediate display (even if offline/failed)
@@ -681,6 +798,11 @@ function App() {
             carrier: ping.carrier || 'Unknown',
             device_model: ping.device_model || 'Unknown',
             created_at: ping.created_at,
+            session_id: ping.session_id,
+            app_version: ping.app_version,
+            test_endpoint: ping.test_endpoint,
+            browser_platform: ping.browser_platform,
+            reported_os: ping.reported_os,
           }))
         )
       }
@@ -714,6 +836,11 @@ function App() {
           carrier: payload.new.carrier || 'Unknown',
           device_model: payload.new.device_model || 'Unknown',
           created_at: payload.new.created_at,
+          session_id: payload.new.session_id,
+          app_version: payload.new.app_version,
+          test_endpoint: payload.new.test_endpoint,
+          browser_platform: payload.new.browser_platform,
+          reported_os: payload.new.reported_os,
         }
         setMapPings((prev) => [newPing, ...prev])
       }
@@ -880,8 +1007,24 @@ function App() {
 
   // Calculate ping statistics and experience score
   const pingStats = useMemo(() => {
-    // Filter pings based on selected carriers and status filters
-    const filteredByCarrier = mapPings.filter((ping) => {
+    // Start with all pings
+    let pingsToAnalyze = mapPings
+
+    // If map bounds are set, filter to only pings within bounds
+    if (mapBounds) {
+      pingsToAnalyze = mapPings.filter((ping) => {
+        if (ping.latitude === null || ping.longitude === null) return false
+        return (
+          ping.latitude >= mapBounds.south &&
+          ping.latitude <= mapBounds.north &&
+          ping.longitude >= mapBounds.west &&
+          ping.longitude <= mapBounds.east
+        )
+      })
+    }
+
+    // Then filter based on carrier and status selections
+    const filteredByCarrier = pingsToAnalyze.filter((ping) => {
       // Check carrier filter
       if (!selectedCarrierFilters.has(ping.carrier as Carrier)) {
         return false
@@ -905,6 +1048,7 @@ function App() {
         highLatencyPercentage: 0,
         timedOutPercentage: 0,
         experienceScore: 100,
+        isFiltered: mapBounds !== null,
       }
     }
 
@@ -934,8 +1078,9 @@ function App() {
       highLatencyPercentage,
       timedOutPercentage,
       experienceScore: Math.round(experienceScore * 10) / 10,
+      isFiltered: mapBounds !== null,
     }
-  }, [mapPings, selectedCarrierFilters, selectedStatusFilters])
+  }, [mapPings, selectedCarrierFilters, selectedStatusFilters, mapBounds])
 
   // Map center calculation - default to user location if available, else a fallback center
   const mapCenter = useMemo(() => {
@@ -1053,6 +1198,25 @@ function App() {
                 {filteredPings.length} / {mapPings.length} pings
               </span>
 
+              {/* Toggle Pins Button */}
+              <button
+                onClick={() => setShowMapPins(!showMapPins)}
+                style={{
+                  padding: '8px 12px',
+                  backgroundColor: showMapPins ? '#4CAF50' : '#ccc',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '5px',
+                  cursor: 'pointer',
+                  fontSize: '13px',
+                  fontWeight: 'bold',
+                  transition: 'all 0.2s',
+                }}
+                title={showMapPins ? 'Click to hide pins (faster map)' : 'Click to show pins on map'}
+              >
+                {showMapPins ? '📌 Pins ON' : '📌 Pins OFF'}
+              </button>
+
               {/* Experience Score Badge */}
               {pingStats.totalPings > 0 && (
                 <div
@@ -1070,10 +1234,13 @@ function App() {
                     gap: '6px',
                     border: `2px solid ${pingStats.experienceScore >= 80 ? '#4CAF50' : 
                                         pingStats.experienceScore >= 60 ? '#FFA500' : '#f44336'}`,
+                    position: 'relative',
                   }}
+                  title={pingStats.isFiltered ? `Score: ${pingStats.experienceScore} (📍 Visible area only: ${pingStats.totalPings} pings)` : `Score: ${pingStats.experienceScore} (${pingStats.totalPings} pings total)`}
                 >
                   <span>📊</span>
                   <span>Score: {pingStats.experienceScore}</span>
+                  {pingStats.isFiltered && <span style={{ marginLeft: '4px', fontSize: '10px', opacity: 0.8 }}>📍 AREA</span>}
                 </div>
               )}
 
@@ -1214,7 +1381,9 @@ function App() {
                   alignItems: 'center',
                 }}
               >
-                <span style={{ fontSize: '12px', fontWeight: 'bold', color: '#666' }}>Quick Stats:</span>
+                <span style={{ fontSize: '12px', fontWeight: 'bold', color: '#666' }}>
+                  Quick Stats{pingStats.isFiltered && ` (📍 Visible: ${pingStats.totalPings} pings)`}:
+                </span>
                 
                 {/* OK Percentage */}
                 <div
@@ -1351,6 +1520,7 @@ function App() {
                   isFollowing={isMapFollowing}
                   setIsFollowing={setIsMapFollowing}
                 />
+                <MapBoundsTracker onBoundsChange={setMapBounds} />
 
               {/* Current location marker */}
               {location.latitude && location.longitude && (
@@ -1378,7 +1548,7 @@ function App() {
               )}
 
               {/* Ping markers */}
-              {filteredPings
+              {showMapPins && filteredPings
                 .filter(
                   (ping) =>
                     ping.latitude !== null &&
@@ -1430,10 +1600,44 @@ function App() {
                         </p>
                         {ping.created_at && (
                           <p>
-                            Time:{' '}
+                            Date:{' '}
                             <strong>
-                              {new Date(ping.created_at).toLocaleTimeString()}
+                              {new Date(ping.created_at).toLocaleDateString()} {new Date(ping.created_at).toLocaleTimeString()}
                             </strong>
+                          </p>
+                        )}
+                        {ping.session_id && (
+                          <p>
+                            Session ID:{' '}
+                            <strong style={{ fontSize: '11px', fontFamily: 'monospace' }}>
+                              {ping.session_id}
+                            </strong>
+                          </p>
+                        )}
+                        {ping.browser_platform && (
+                          <p>
+                            Browser Platform:{' '}
+                            <strong>{ping.browser_platform}</strong>
+                          </p>
+                        )}
+                        {ping.reported_os && (
+                          <p>
+                            Reported OS:{' '}
+                            <strong>{ping.reported_os}</strong>
+                          </p>
+                        )}
+                        {ping.test_endpoint && (
+                          <p>
+                            Test Endpoint:{' '}
+                            <strong style={{ fontSize: '11px', fontFamily: 'monospace' }}>
+                              {ping.test_endpoint}
+                            </strong>
+                          </p>
+                        )}
+                        {ping.app_version && (
+                          <p>
+                            App Version:{' '}
+                            <strong>{ping.app_version}</strong>
                           </p>
                         )}
                       </div>
@@ -1489,7 +1693,10 @@ function App() {
             Live Tracker
           </button>
           <button
-            onClick={() => setCurrentView('map')}
+            onClick={() => {
+              setCurrentView('map')
+              setShowMapPins(false) // Disable pins by default for fast loading
+            }}
             style={{
               padding: '10px 20px',
               backgroundColor: (currentView as string) === 'map' ? '#2196F3' : '#ddd',
