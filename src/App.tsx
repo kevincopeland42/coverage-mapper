@@ -451,7 +451,7 @@ const flushOfflineQueue = async (supabaseInsert: (data: any[]) => Promise<{ erro
       
       console.log(`🔄 Batch ${batchNum}/${totalBatches}: Syncing ${batch.length} pings...`)
       
-      const { error, data } = await supabaseInsert(batch).then(r => ({ error: r.error, data: r.data }))
+      const { error, data } = await supabaseInsert(batch)
       
       if (!error) {
         console.log(`✅ Batch ${batchNum} synced successfully (${data?.length || batch.length} rows)`)
