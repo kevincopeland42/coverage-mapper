@@ -394,103 +394,8 @@ const getDeviceModel = (): string => {
   return getDetailedDeviceInfo().model
 }
 
-// Offline queue management
-const OFFLINE_QUEUE_KEY = 'offline_pings'
+// Session and carrier management
 const ACTIVE_CARRIER_KEY = 'active_carrier'
-
-const getOfflineQueue = (): PingResult[] => {
-  try {
-    const queued = localStorage.getItem(OFFLINE_QUEUE_KEY)
-    return queued ? JSON.parse(queued) : []
-  } catch {
-    return []
-  }
-}
-
-const addToOfflineQueue = (ping: PingResult) => {
-  try {
-    const queue = getOfflineQueue()
-    queue.push(ping)
-    localStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(queue))
-  } catch (error) {
-    console.error('Failed to add to offline queue:', error)
-  }
-}
-
-const clearOfflineQueue = () => {
-  try {
-    localStorage.removeItem(OFFLINE_QUEUE_KEY)
-  } catch (error) {
-    console.error('Failed to clear offline queue:', error)
-  }
-}
-
-const flushOfflineQueue = async (supabaseInsert: (data: any[]) => Promise<{ error: any; data: any }>) => {
-  const queue = getOfflineQueue()
-  if (queue.length === 0) {
-    console.log('No offline pings to sync')
-    return true
-  }
-
-  if (!navigator.onLine) {
-    console.warn('Still offline: Cannot flush queue yet')
-    return false
-  }
-
-  console.log(`🔄 Syncing ${queue.length} offline ping(s) to Supabase...`)
-  
-  // Process queue in chunks of 50 to avoid timeout/limit issues
-  const BATCH_SIZE = 50
-  const successfulIndices = new Set<number>()
-  const totalBatches = Math.ceil(queue.length / BATCH_SIZE)
-
-  try {
-    for (let i = 0; i < queue.length; i += BATCH_SIZE) {
-      const batch = queue.slice(i, i + BATCH_SIZE)
-      const batchNum = Math.floor(i / BATCH_SIZE) + 1
-      
-      console.log(`🔄 Batch ${batchNum}/${totalBatches}: Syncing ${batch.length} pings...`)
-      
-      const { error, data } = await supabaseInsert(batch)
-      
-      if (!error) {
-        console.log(`✅ Batch ${batchNum} synced successfully (${data?.length || batch.length} rows)`)
-        // Track indices of successfully synced items
-        for (let j = 0; j < batch.length; j++) {
-          successfulIndices.add(i + j)
-        }
-      } else {
-        console.error(`❌ Batch ${batchNum} failed:`, { code: error.code, message: error.message })
-      }
-    }
-
-    const successCount = successfulIndices.size
-    const failureCount = queue.length - successCount
-
-    if (successCount === queue.length) {
-      console.log(`✅ Successfully synced all ${successCount} offline ping(s) to Supabase`)
-      clearOfflineQueue()
-      return true
-    } else if (successCount > 0) {
-      console.warn(`⚠️ Partial sync: ${successCount} succeeded, ${failureCount} failed`)
-      // Build new queue with only failed items
-      const remainingQueue = queue.filter((_, idx) => !successfulIndices.has(idx))
-      try {
-        localStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(remainingQueue))
-      } catch (e) {
-        console.error('Failed to update queue after partial sync:', e)
-      }
-      return false
-    } else {
-      console.error(`❌ All ${failureCount} pings failed to sync`)
-      return false
-    }
-  } catch (err) {
-    const errorMsg = err instanceof Error ? err.message : String(err)
-    console.error('❌ Exception syncing offline queue:', errorMsg)
-    return false
-  }
-}
 
 function App() {
   const [location, setLocation] = useState<LocationData>({
@@ -512,9 +417,8 @@ function App() {
       return 'Other'
     }
   })
-  const [selectedCarrierFilters, setSelectedCarrierFilters] = useState<Set<Carrier>>(new Set()) // Start with all carriers deselected
+  const [selectedCarrierFilters, setSelectedCarrierFilters] = useState<Set<Carrier>>(new Set())
   const [selectedStatusFilters, setSelectedStatusFilters] = useState<Set<'HIGH' | 'TIMEOUT'>>(new Set())
-  const [offlineQueueSize, setOfflineQueueSize] = useState(0) // Track offline queue size for UI
   const [isMapFollowing, setIsMapFollowing] = useState(false) // Track if map is in following mode
   const [mapBounds, setMapBounds] = useState<MapBounds | null>(null) // Track visible map bounds for stats filtering
   
@@ -636,41 +540,22 @@ function App() {
 
   // Record ping to Supabase
   const recordPingToSupabase = async (pingData: PingResult) => {
-    // Check if online first
-    if (!navigator.onLine) {
-      console.warn('🔴 Device offline (navigator.onLine=false): Queueing ping to localStorage')
-      addToOfflineQueue(pingData)
-      return false
-    }
-
     try {
-      console.log('📤 Attempting Supabase insert for ping:', { carrier: pingData.carrier, status: pingData.status, lat: pingData.latitude, lng: pingData.longitude })
-      
-      // Use .select() to force return of inserted data
-      const { error, data, status } = await supabase.from('pings').insert([pingData]).select()
-
-      console.log('📊 Supabase response:', { status, hasError: !!error, hasData: !!data, errorCode: error?.code, errorMessage: error?.message })
+      const { error, data } = await supabase.from('pings').insert([pingData]).select()
 
       if (error) {
-        console.error('❌ Supabase insert failed:', { code: error.code, message: error.message, details: error })
-        console.warn('📥 Queueing ping to localStorage due to Supabase error')
-        addToOfflineQueue(pingData)
+        console.error('❌ Supabase insert failed:', { code: error.code, message: error.message })
         return false
       }
 
       if (data && data.length > 0) {
-        console.log('✅ Ping successfully inserted to Supabase, ID:', data[0].id)
-        return true
-      } else {
-        console.warn('⚠️ Insert returned no data - treating as success anyway')
+        console.log('✅ Ping successfully inserted to Supabase')
         return true
       }
+      return true
     } catch (err) {
-      // Network or other exception during Supabase call
       const errorMsg = err instanceof Error ? err.message : String(err)
-      console.error('❌ Exception during Supabase insert:', errorMsg, err)
-      console.warn('📥 Queueing ping to localStorage due to exception')
-      addToOfflineQueue(pingData)
+      console.error('❌ Exception during Supabase insert:', errorMsg)
       return false
     }
   }
@@ -748,33 +633,11 @@ function App() {
         `Online: ${navigator.onLine}`
       )
 
-      // Try to record to Supabase (will queue offline if needed)
+      // Try to record to Supabase
       const recordedToSupabase = await recordPingToSupabase(pingData)
       
-      if (!recordedToSupabase && pingResult.status === 'TIMEOUT') {
-        const queueSize = getOfflineQueue().length
-        console.warn(`⏳ TIMEOUT ping queued offline (queue size: ${queueSize})`)
-        setOfflineQueueSize(queueSize)
-      }
-
-      // If this was a successful Supabase record and we were offline, try to flush remaining queue
-      if (recordedToSupabase && getOfflineQueue().length > 0) {
-        console.log('🔄 Successful ping detected after offline period - syncing queue...')
-        setTimeout(async () => {
-          const success = await flushOfflineQueue(async (data) => {
-            return supabase.from('pings').insert(data)
-          })
-          if (success) {
-            console.log('✅ Offline queue cleared successfully')
-            setOfflineQueueSize(0)
-          } else {
-            const queueSize = getOfflineQueue().length
-            setOfflineQueueSize(queueSize)
-          }
-        }, 500)
-      } else if (recordedToSupabase) {
-        // Successfully recorded and no queue left
-        setOfflineQueueSize(0)
+      if (!recordedToSupabase) {
+        console.warn(`⚠️ Ping failed to record to Supabase`)
       }
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error)
@@ -909,67 +772,23 @@ function App() {
     }
   }, [])
 
-  // Handle online/offline events and flush offline queue
+  // Handle online/offline events
   useEffect(() => {
-    const handleOnline = async () => {
-      console.log('📡 Connection restored! Attempting to sync offline pings...')
-      // Wait a moment for connection to stabilize
-      setTimeout(async () => {
-        const success = await flushOfflineQueue(async (data) => {
-          return supabase.from('pings').insert(data)
-        })
-        if (success) {
-          console.log('✅ Offline queue cleared successfully')
-          setOfflineQueueSize(0)
-        } else {
-          // Update UI with current queue size
-          const queueSize = getOfflineQueue().length
-          setOfflineQueueSize(queueSize)
-        }
-      }, 1000)
+    const handleOnline = () => {
+      console.log('📡 Connection restored')
     }
 
     const handleOffline = () => {
-      console.log('📵 Connection lost - pings will be queued offline')
+      console.log('📵 Connection lost')
     }
 
     window.addEventListener('online', handleOnline)
     window.addEventListener('offline', handleOffline)
 
-    // Attempt to flush queue on component mount if online
-    if (navigator.onLine) {
-      setTimeout(async () => {
-        const success = await flushOfflineQueue(async (data) => {
-          return supabase.from('pings').insert(data)
-        })
-        if (success) {
-          setOfflineQueueSize(0)
-        } else {
-          const queueSize = getOfflineQueue().length
-          setOfflineQueueSize(queueSize)
-        }
-      }, 2000)
-    }
-
     return () => {
       window.removeEventListener('online', handleOnline)
       window.removeEventListener('offline', handleOffline)
     }
-  }, [])
-
-  // Monitor offline queue size for UI updates
-  useEffect(() => {
-    const updateQueueSize = () => {
-      setOfflineQueueSize(getOfflineQueue().length)
-    }
-
-    // Update queue size on initial load
-    updateQueueSize()
-
-    // Monitor queue size every 2 seconds
-    const intervalId = setInterval(updateQueueSize, 2000)
-
-    return () => clearInterval(intervalId)
   }, [])
 
   // Update cached coordinates when location state changes
@@ -1299,78 +1118,6 @@ function App() {
                   <span>📊</span>
                   <span>Score: {pingStats.experienceScore}</span>
                   {pingStats.isFiltered && <span style={{ marginLeft: '4px', fontSize: '10px', opacity: 0.8 }}>📍 AREA</span>}
-                </div>
-              )}
-
-              {/* Offline Queue Status Indicator */}
-              {offlineQueueSize > 0 && (
-                <div
-                  style={{
-                    display: 'flex',
-                    gap: '8px',
-                    alignItems: 'center',
-                  }}
-                >
-                  <div
-                    style={{
-                      padding: '8px 12px',
-                      backgroundColor: '#ff9800',
-                      color: 'white',
-                      borderRadius: '20px',
-                      fontSize: '13px',
-                      fontWeight: 'bold',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '6px',
-                      boxShadow: '0 2px 4px rgba(0,0,0,0.2)',
-                    }}
-                  >
-                    <span>⏳</span>
-                    <span>{offlineQueueSize} pending</span>
-                  </div>
-                  <button
-                    onClick={() => {
-                      if (confirm(`Clear ${offlineQueueSize} pending pings? This cannot be undone.`)) {
-                        clearOfflineQueue()
-                        setOfflineQueueSize(0)
-                        console.log('✅ Offline queue manually cleared')
-                      }
-                    }}
-                    style={{
-                      padding: '8px 12px',
-                      backgroundColor: '#f44336',
-                      color: 'white',
-                      borderRadius: '20px',
-                      fontSize: '12px',
-                      fontWeight: 'bold',
-                      border: 'none',
-                      cursor: 'pointer',
-                      boxShadow: '0 2px 4px rgba(0,0,0,0.2)',
-                    }}
-                    title="Clear the offline queue - use only if queue is stuck"
-                  >
-                    🗑️ Clear
-                  </button>
-                </div>
-              )}
-
-              {!navigator.onLine && (
-                <div
-                  style={{
-                    padding: '8px 12px',
-                    backgroundColor: '#f44336',
-                    color: 'white',
-                    borderRadius: '20px',
-                    fontSize: '13px',
-                    fontWeight: 'bold',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '6px',
-                    boxShadow: '0 2px 4px rgba(0,0,0,0.2)',
-                  }}
-                >
-                  <span>📵</span>
-                  <span>Offline</span>
                 </div>
               )}
             </div>
@@ -1800,70 +1547,6 @@ function App() {
 
           {/* Offline Queue Status Indicator */}
           <div style={{ marginLeft: 'auto', display: 'flex', gap: '10px', alignItems: 'center' }}>
-            {offlineQueueSize > 0 && (
-              <>
-                <div
-                  style={{
-                    padding: '8px 12px',
-                    backgroundColor: '#ff9800',
-                    color: 'white',
-                    borderRadius: '20px',
-                    fontSize: '13px',
-                    fontWeight: 'bold',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '6px',
-                    boxShadow: '0 2px 4px rgba(0,0,0,0.2)',
-                  }}
-                >
-                  <span>⏳</span>
-                  <span>{offlineQueueSize} pending</span>
-                </div>
-                <button
-                  onClick={() => {
-                    if (confirm(`Clear ${offlineQueueSize} pending pings? This cannot be undone.`)) {
-                      clearOfflineQueue()
-                      setOfflineQueueSize(0)
-                      console.log('✅ Offline queue manually cleared')
-                    }
-                  }}
-                  style={{
-                    padding: '8px 12px',
-                    backgroundColor: '#f44336',
-                    color: 'white',
-                    borderRadius: '20px',
-                    fontSize: '12px',
-                    fontWeight: 'bold',
-                    border: 'none',
-                    cursor: 'pointer',
-                    boxShadow: '0 2px 4px rgba(0,0,0,0.2)',
-                  }}
-                  title="Clear the offline queue - use only if queue is stuck"
-                >
-                  🗑️ Clear
-                </button>
-              </>
-            )}
-
-            {!navigator.onLine && (
-              <div
-                style={{
-                  padding: '8px 12px',
-                  backgroundColor: '#f44336',
-                  color: 'white',
-                  borderRadius: '20px',
-                  fontSize: '13px',
-                  fontWeight: 'bold',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                  boxShadow: '0 2px 4px rgba(0,0,0,0.2)',
-                }}
-              >
-                <span>📵</span>
-                <span>Offline</span>
-              </div>
-            )}
           </div>
         </div>
 
