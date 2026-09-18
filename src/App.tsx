@@ -878,6 +878,50 @@ function App() {
     setPocketSlidePosition(0)
   }
 
+  // Calculate ping statistics and experience score
+  const pingStats = useMemo(() => {
+    if (mapPings.length === 0) {
+      return {
+        totalPings: 0,
+        okCount: 0,
+        highLatencyCount: 0,
+        timedOutCount: 0,
+        okPercentage: 0,
+        highLatencyPercentage: 0,
+        timedOutPercentage: 0,
+        experienceScore: 100,
+      }
+    }
+
+    const okCount = mapPings.filter(p => p.status === 'OK').length
+    const highLatencyCount = mapPings.filter(p => p.status === 'HIGH').length
+    const timedOutCount = mapPings.filter(p => p.status === 'TIMEOUT').length
+    const totalPings = mapPings.length
+
+    const okPercentage = Math.round((okCount / totalPings) * 100)
+    const highLatencyPercentage = Math.round((highLatencyCount / totalPings) * 100)
+    const timedOutPercentage = Math.round((timedOutCount / totalPings) * 100)
+
+    // Experience score: 100 if perfect, decreases based on issues
+    // High latency reduces score by half the percentage
+    // Timeouts reduce score by full percentage
+    const experienceScore = Math.max(
+      0,
+      100 - (highLatencyPercentage * 0.5 + timedOutPercentage)
+    )
+
+    return {
+      totalPings,
+      okCount,
+      highLatencyCount,
+      timedOutCount,
+      okPercentage,
+      highLatencyPercentage,
+      timedOutPercentage,
+      experienceScore: Math.round(experienceScore * 10) / 10,
+    }
+  }, [mapPings])
+
   // Map center calculation - default to user location if available, else a fallback center
   const mapCenter = useMemo(() => {
     if (mapPings.length > 0 && mapPings[0].latitude && mapPings[0].longitude) {
@@ -993,6 +1037,30 @@ function App() {
               <span style={{ fontSize: '14px', color: '#666' }}>
                 {filteredPings.length} / {mapPings.length} pings
               </span>
+
+              {/* Experience Score Badge */}
+              {pingStats.totalPings > 0 && (
+                <div
+                  style={{
+                    padding: '8px 14px',
+                    backgroundColor: pingStats.experienceScore >= 80 ? '#e8f5e9' : 
+                                     pingStats.experienceScore >= 60 ? '#fff3e0' : '#ffebee',
+                    color: pingStats.experienceScore >= 80 ? '#4CAF50' : 
+                           pingStats.experienceScore >= 60 ? '#FFA500' : '#f44336',
+                    borderRadius: '20px',
+                    fontSize: '13px',
+                    fontWeight: 'bold',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    border: `2px solid ${pingStats.experienceScore >= 80 ? '#4CAF50' : 
+                                        pingStats.experienceScore >= 60 ? '#FFA500' : '#f44336'}`,
+                  }}
+                >
+                  <span>📊</span>
+                  <span>Score: {pingStats.experienceScore}</span>
+                </div>
+              )}
 
               {/* Offline Queue Status Indicator */}
               {offlineQueueSize > 0 && (
@@ -1115,6 +1183,82 @@ function App() {
                 </button>
               )}
             </div>
+
+            {/* Statistics Summary Row */}
+            {pingStats.totalPings > 0 && (
+              <div
+                style={{
+                  display: 'flex',
+                  gap: '12px',
+                  marginBottom: '10px',
+                  padding: '12px',
+                  backgroundColor: '#f9f9f9',
+                  borderRadius: '6px',
+                  border: '1px solid #e0e0e0',
+                  flexWrap: 'wrap',
+                  alignItems: 'center',
+                }}
+              >
+                <span style={{ fontSize: '12px', fontWeight: 'bold', color: '#666' }}>Quick Stats:</span>
+                
+                {/* OK Percentage */}
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    padding: '6px 10px',
+                    backgroundColor: '#e8f5e9',
+                    borderRadius: '4px',
+                    fontSize: '12px',
+                  }}
+                >
+                  <span>✅</span>
+                  <span style={{ fontWeight: 'bold', color: '#4CAF50' }}>
+                    {pingStats.okPercentage}%
+                  </span>
+                  <span style={{ color: '#999' }}>OK</span>
+                </div>
+
+                {/* High Latency Percentage */}
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    padding: '6px 10px',
+                    backgroundColor: '#fff3e0',
+                    borderRadius: '4px',
+                    fontSize: '12px',
+                  }}
+                >
+                  <span>⚠️</span>
+                  <span style={{ fontWeight: 'bold', color: '#FFA500' }}>
+                    {pingStats.highLatencyPercentage}%
+                  </span>
+                  <span style={{ color: '#999' }}>High Latency</span>
+                </div>
+
+                {/* Timed Out Percentage */}
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    padding: '6px 10px',
+                    backgroundColor: '#ffebee',
+                    borderRadius: '4px',
+                    fontSize: '12px',
+                  }}
+                >
+                  <span>❌</span>
+                  <span style={{ fontWeight: 'bold', color: '#f44336' }}>
+                    {pingStats.timedOutPercentage}%
+                  </span>
+                  <span style={{ color: '#999' }}>Timed-out</span>
+                </div>
+              </div>
+            )}
 
             {/* Filter Chips */}
             <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
@@ -1464,6 +1608,125 @@ function App() {
             </p>
           )}
           <p style={{ fontSize: '16px', color: '#333' }}>Total pings recorded: {mapPings.length}</p>
+        </div>
+
+        <div
+          style={{
+            marginTop: '20px',
+            padding: '20px',
+            border: '1px solid #ccc',
+            borderRadius: '8px',
+            backgroundColor: '#fafafa',
+          }}
+        >
+          <h2>Network Statistics & Experience Score</h2>
+          {pingStats.totalPings === 0 ? (
+            <p style={{ color: '#999' }}>Start tracking to see statistics</p>
+          ) : (
+            <>
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+                  gap: '15px',
+                  marginBottom: '20px',
+                }}
+              >
+                {/* OK Status */}
+                <div
+                  style={{
+                    padding: '15px',
+                    backgroundColor: '#e8f5e9',
+                    borderRadius: '6px',
+                    textAlign: 'center',
+                    borderLeft: '4px solid #4CAF50',
+                  }}
+                >
+                  <p style={{ margin: '0 0 8px 0', fontSize: '14px', color: '#666' }}>✅ OK</p>
+                  <p style={{ margin: '0', fontSize: '28px', fontWeight: 'bold', color: '#4CAF50' }}>
+                    {pingStats.okPercentage}%
+                  </p>
+                  <p style={{ margin: '4px 0 0 0', fontSize: '12px', color: '#999' }}>
+                    {pingStats.okCount} pings
+                  </p>
+                </div>
+
+                {/* High Latency Status */}
+                <div
+                  style={{
+                    padding: '15px',
+                    backgroundColor: '#fff3e0',
+                    borderRadius: '6px',
+                    textAlign: 'center',
+                    borderLeft: '4px solid #FFA500',
+                  }}
+                >
+                  <p style={{ margin: '0 0 8px 0', fontSize: '14px', color: '#666' }}>⚠️ High Latency</p>
+                  <p style={{ margin: '0', fontSize: '28px', fontWeight: 'bold', color: '#FFA500' }}>
+                    {pingStats.highLatencyPercentage}%
+                  </p>
+                  <p style={{ margin: '4px 0 0 0', fontSize: '12px', color: '#999' }}>
+                    {pingStats.highLatencyCount} pings
+                  </p>
+                </div>
+
+                {/* Timed Out Status */}
+                <div
+                  style={{
+                    padding: '15px',
+                    backgroundColor: '#ffebee',
+                    borderRadius: '6px',
+                    textAlign: 'center',
+                    borderLeft: '4px solid #f44336',
+                  }}
+                >
+                  <p style={{ margin: '0 0 8px 0', fontSize: '14px', color: '#666' }}>❌ Timed-out</p>
+                  <p style={{ margin: '0', fontSize: '28px', fontWeight: 'bold', color: '#f44336' }}>
+                    {pingStats.timedOutPercentage}%
+                  </p>
+                  <p style={{ margin: '4px 0 0 0', fontSize: '12px', color: '#999' }}>
+                    {pingStats.timedOutCount} pings
+                  </p>
+                </div>
+              </div>
+
+              {/* Experience Score */}
+              <div
+                style={{
+                  padding: '20px',
+                  backgroundColor: 'white',
+                  borderRadius: '6px',
+                  border: '2px solid #2196F3',
+                  textAlign: 'center',
+                }}
+              >
+                <p style={{ margin: '0 0 10px 0', fontSize: '16px', fontWeight: 'bold', color: '#333' }}>
+                  📊 Network Experience Score
+                </p>
+                <div
+                  style={{
+                    fontSize: '48px',
+                    fontWeight: 'bold',
+                    color: pingStats.experienceScore >= 80 ? '#4CAF50' : 
+                           pingStats.experienceScore >= 60 ? '#FFA500' : '#f44336',
+                    marginBottom: '10px',
+                  }}
+                >
+                  {pingStats.experienceScore}
+                </div>
+                <p style={{ margin: '0', fontSize: '14px', color: '#666' }}>
+                  {pingStats.experienceScore >= 80
+                    ? '✅ Excellent network quality'
+                    : pingStats.experienceScore >= 60
+                    ? '⚠️ Moderate network quality - some issues detected'
+                    : '❌ Poor network quality - significant issues'}
+                </p>
+                <p style={{ margin: '8px 0 0 0', fontSize: '12px', color: '#999' }}>
+                  Based on {pingStats.totalPings} total pings
+                </p>
+              </div>
+            </>
+          )}
         </div>
 
         <div
