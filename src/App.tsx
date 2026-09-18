@@ -451,16 +451,16 @@ const flushOfflineQueue = async (supabaseInsert: (data: any[]) => Promise<{ erro
       
       console.log(`🔄 Batch ${batchNum}/${totalBatches}: Syncing ${batch.length} pings...`)
       
-      const { error } = await supabaseInsert(batch)
+      const { error, data } = await supabaseInsert(batch).then(r => ({ error: r.error, data: r.data }))
       
       if (!error) {
-        console.log(`✅ Batch ${batchNum} synced successfully`)
+        console.log(`✅ Batch ${batchNum} synced successfully (${data?.length || batch.length} rows)`)
         // Track indices of successfully synced items
         for (let j = 0; j < batch.length; j++) {
           successfulIndices.add(i + j)
         }
       } else {
-        console.error(`❌ Batch ${batchNum} failed:`, error.message || error)
+        console.error(`❌ Batch ${batchNum} failed:`, { code: error.code, message: error.message })
       }
     }
 
@@ -644,18 +644,27 @@ function App() {
     }
 
     try {
-      console.log('📤 Attempting Supabase insert for ping:', pingData.carrier, pingData.status)
-      const { error } = await supabase.from('pings').insert([pingData])
+      console.log('📤 Attempting Supabase insert for ping:', { carrier: pingData.carrier, status: pingData.status, lat: pingData.latitude, lng: pingData.longitude })
+      
+      // Use .select() to force return of inserted data
+      const { error, data, status } = await supabase.from('pings').insert([pingData]).select()
+
+      console.log('📊 Supabase response:', { status, hasError: !!error, hasData: !!data, errorCode: error?.code, errorMessage: error?.message })
 
       if (error) {
-        console.error('❌ Supabase insert error:', error.code, error.message, error)
+        console.error('❌ Supabase insert failed:', { code: error.code, message: error.message, details: error })
         console.warn('📥 Queueing ping to localStorage due to Supabase error')
         addToOfflineQueue(pingData)
         return false
       }
 
-      console.log('✅ Ping successfully recorded to Supabase:', pingData.status)
-      return true
+      if (data && data.length > 0) {
+        console.log('✅ Ping successfully inserted to Supabase, ID:', data[0].id)
+        return true
+      } else {
+        console.warn('⚠️ Insert returned no data - treating as success anyway')
+        return true
+      }
     } catch (err) {
       // Network or other exception during Supabase call
       const errorMsg = err instanceof Error ? err.message : String(err)
