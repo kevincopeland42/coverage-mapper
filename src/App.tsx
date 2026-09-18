@@ -17,6 +17,7 @@ interface LocationData {
 
 interface PingResult {
   id?: string
+  client_id?: string
   latitude: number | null
   longitude: number | null
   accuracy: number | null
@@ -407,22 +408,34 @@ const getOfflineQueue = (): PingResult[] => {
   }
 }
 
+const removeFromOfflineQueueByClientIds = (clientIds: Set<string>) => {
+  try {
+    // Read CURRENT queue at removal time, not a stale snapshot
+    const currentQueue = getOfflineQueue()
+    const filtered = currentQueue.filter(ping => !clientIds.has(ping.client_id || ''))
+    
+    if (filtered.length < currentQueue.length) {
+      localStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(filtered))
+      console.log(`✅ Removed ${currentQueue.length - filtered.length} confirmed pings, ${filtered.length} still queued`)
+    }
+  } catch (error) {
+    console.error('Failed to remove from offline queue:', error)
+  }
+}
+
 const addToOfflineQueue = (ping: PingResult) => {
   try {
     const queue = getOfflineQueue()
+    // Make idempotent: don't add if this client_id already exists
+    if (ping.client_id && queue.some(p => p.client_id === ping.client_id)) {
+      console.log(`⚠️ Ping ${ping.client_id} already queued, skipping duplicate`)
+      return
+    }
     queue.push(ping)
     localStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(queue))
     console.log(`📥 Ping queued offline (queue size: ${queue.length})`)
   } catch (error) {
     console.error('Failed to add to offline queue:', error)
-  }
-}
-
-const clearOfflineQueue = () => {
-  try {
-    localStorage.removeItem(OFFLINE_QUEUE_KEY)
-  } catch (error) {
-    console.error('Failed to clear offline queue:', error)
   }
 }
 
@@ -438,34 +451,42 @@ const flushOfflineQueue = async () => {
   console.log(`🔄 Syncing ${queue.length} offline ping(s) to Supabase...`)
   
   const BATCH_SIZE = 50
-  const successfulIndices = new Set<number>()
+  const successfulClientIds = new Set<string>()
+  let hasError = false
 
   try {
     for (let i = 0; i < queue.length; i += BATCH_SIZE) {
       const batch = queue.slice(i, i + BATCH_SIZE)
-      const { error } = await supabase.from('pings').insert(batch).select()
-      
-      if (!error) {
-        console.log(`✅ Synced batch of ${batch.length}`)
-        for (let j = 0; j < batch.length; j++) {
-          successfulIndices.add(i + j)
+      try {
+        // Use upsert on client_id conflict to handle retries idempotently
+        const { error, data } = await supabase
+          .from('pings')
+          .upsert(batch, { onConflict: 'client_id' })
+          .select()
+        
+        if (!error && data && data.length > 0) {
+          console.log(`✅ Synced batch of ${data.length}`)
+          data.forEach((row: any) => {
+            if (row.client_id) {
+              successfulClientIds.add(row.client_id)
+            }
+          })
+        } else if (error) {
+          console.error(`❌ Batch upsert failed:`, error.message)
+          hasError = true
         }
-      } else {
-        console.error(`❌ Batch failed:`, error.message)
+      } catch (batchErr) {
+        console.error(`❌ Batch exception:`, batchErr)
+        hasError = true
       }
     }
 
-    if (successfulIndices.size === queue.length) {
-      console.log(`✅ All offline pings synced`)
-      clearOfflineQueue()
-      return true
-    } else if (successfulIndices.size > 0) {
-      const remainingQueue = queue.filter((_, idx) => !successfulIndices.has(idx))
-      localStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(remainingQueue))
-      console.warn(`⚠️ Partial sync: ${successfulIndices.size} synced, ${remainingQueue.length} still queued`)
-      return false
+    if (successfulClientIds.size > 0) {
+      // Read CURRENT queue at removal time, not the stale snapshot
+      removeFromOfflineQueueByClientIds(successfulClientIds)
     }
-    return false
+
+    return !hasError && successfulClientIds.size === queue.length
   } catch (err) {
     console.error('Exception syncing queue:', err)
     return false
@@ -616,23 +637,29 @@ function App() {
   // Record ping to Supabase
   const recordPingToSupabase = async (pingData: PingResult) => {
     try {
-      const { error, data } = await supabase.from('pings').insert([pingData]).select()
+      // Use upsert for idempotent insert (handles retries if client_id exists)
+      const { error, data } = await supabase
+        .from('pings')
+        .upsert([pingData], { onConflict: 'client_id' })
+        .select()
 
       if (error) {
         console.error('❌ Supabase upload failed:', { code: error.code, message: error.message })
-        addToOfflineQueue(pingData)
+        // Don't queue here - already queued before this function was called
         return false
       }
 
-      if (data && data.length > 0) {
+      if (data && data.length > 0 && pingData.client_id) {
         console.log('✅ Ping uploaded to Supabase')
+        // Remove only this confirmed client_id from queue
+        removeFromOfflineQueueByClientIds(new Set([pingData.client_id]))
         return true
       }
-      return true
+      return false
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err)
       console.error('❌ Exception uploading ping:', errorMsg)
-      addToOfflineQueue(pingData)
+      // Don't queue here - already queued before this function was called
       return false
     }
   }
@@ -666,16 +693,17 @@ function App() {
   // Handle ping and add to history
   const handleAutoPing = useCallback(async () => {
     try {
-      // Fetch fresh GPS coordinates before ping
       const freshLocation = await getFreshGPSCoordinates()
-
-      // Perform ping and measure latency
       const pingResult = await performPing('/')
       const connectionType = getConnectionType()
       const deviceInfo = deviceInfoRef.current
 
-      // Use fresh GPS coordinates for this ping
+      // Generate unique client_id and timestamp EXACTLY ONCE
+      const clientId = crypto.randomUUID()
+      const createdAt = new Date().toISOString()
+
       const pingData: PingResult = {
+        client_id: clientId,
         latitude: freshLocation.latitude,
         longitude: freshLocation.longitude,
         accuracy: freshLocation.accuracy,
@@ -690,32 +718,28 @@ function App() {
         test_endpoint: '/',
         browser_platform: deviceInfo.browserPlatform,
         reported_os: deviceInfo.reportedOS,
+        created_at: createdAt,
       }
 
-      // Always add ping to map state for immediate display (even if offline/failed)
-      const newMapPing: PingResult = {
-        ...pingData,
-        created_at: new Date().toISOString(),
-      }
-      setMapPings((prev) => [...prev, newMapPing])
+      // Step 1: Queue FIRST (persistent storage)
+      addToOfflineQueue(pingData)
 
-      // Log ping result with status
+      // Step 2: Add to map immediately for display
+      setMapPings((prev) => [...prev, pingData])
+
+      // Step 3: Log result
       const statusEmoji = 
         pingResult.status === 'OK' ? '✅' :
         pingResult.status === 'HIGH' ? '⚠️' :
         '❌'
       console.log(
         `${statusEmoji} Ping [${pingResult.status}] - Latency: ${pingResult.latency_ms ?? 'N/A'}ms, ` +
-        `Location: [${freshLocation.latitude?.toFixed(4)}, ${freshLocation.longitude?.toFixed(4)}], ` +
+        `ClientID: ${clientId}, ` +
         `Online: ${navigator.onLine}`
       )
 
-      // Try to record to Supabase
-      const recordedToSupabase = await recordPingToSupabase(pingData)
-      
-      if (!recordedToSupabase) {
-        console.warn(`⚠️ Ping failed to record to Supabase`)
-      }
+      // Step 4: Then attempt upload (if fails, ping stays queued)
+      await recordPingToSupabase(pingData)
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error)
       console.error('❌ Auto ping error:', errorMsg)
@@ -784,6 +808,7 @@ function App() {
         setMapPings(
           allData.map((ping: any) => ({
             id: ping.id,
+            client_id: ping.client_id,
             latitude: ping.latitude,
             longitude: ping.longitude,
             accuracy: ping.accuracy,
@@ -822,6 +847,7 @@ function App() {
       (payload: any) => {
         const newPing: PingResult = {
           id: payload.new.id,
+          client_id: payload.new.client_id,
           latitude: payload.new.latitude,
           longitude: payload.new.longitude,
           accuracy: payload.new.accuracy,
@@ -838,7 +864,16 @@ function App() {
           browser_platform: payload.new.browser_platform,
           reported_os: payload.new.reported_os,
         }
-        setMapPings((prev) => [newPing, ...prev])
+        
+        // Duplicate check inside state setter to avoid stale closure
+        setMapPings((prev) => {
+          const alreadyExists = prev.some(p => p.client_id === newPing.client_id)
+          if (alreadyExists) {
+            console.log(`⚠️ Ignoring duplicate realtime insert for client_id: ${newPing.client_id}`)
+            return prev
+          }
+          return [newPing, ...prev]
+        })
       }
     )
 
