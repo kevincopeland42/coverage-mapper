@@ -434,9 +434,9 @@ const flushOfflineQueue = async (supabaseInsert: (data: any[]) => Promise<{ erro
       
       console.log(`🔄 Batch ${batchNum}/${totalBatches}: Syncing ${batch.length} pings...`)
       
-      const { error, data } = await supabaseInsert(batch)
+      const { error } = await supabaseInsert(batch)
       
-      if (!error && data) {
+      if (!error) {
         console.log(`✅ Batch ${batchNum} synced successfully`)
         successCount += batch.length
       } else if (error) {
@@ -622,7 +622,7 @@ function App() {
     }
 
     try {
-      const { error, data } = await supabase.from('pings').insert([pingData])
+      const { error } = await supabase.from('pings').insert([pingData])
 
       if (error) {
         console.error('Supabase insert error:', error.message, error)
@@ -632,10 +632,8 @@ function App() {
         return false
       }
 
-      if (data) {
-        console.log('✅ Ping successfully recorded to Supabase:', pingData.status)
-        return true
-      }
+      console.log('✅ Ping successfully recorded to Supabase:', pingData.status)
+      return true
     } catch (err) {
       // Network or other exception during Supabase call
       const errorMsg = err instanceof Error ? err.message : String(err)
