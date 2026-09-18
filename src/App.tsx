@@ -429,20 +429,19 @@ const flushOfflineQueue = async (supabaseInsert: (data: any[]) => Promise<{ erro
   const queue = getOfflineQueue()
   if (queue.length === 0) {
     console.log('No offline pings to sync')
-    return
+    return true
   }
 
   if (!navigator.onLine) {
     console.warn('Still offline: Cannot flush queue yet')
-    return
+    return false
   }
 
   console.log(`🔄 Syncing ${queue.length} offline ping(s) to Supabase...`)
   
   // Process queue in chunks of 50 to avoid timeout/limit issues
   const BATCH_SIZE = 50
-  let successCount = 0
-  let failureCount = 0
+  const successfulIndices = new Set<number>()
   const totalBatches = Math.ceil(queue.length / BATCH_SIZE)
 
   try {
@@ -456,21 +455,26 @@ const flushOfflineQueue = async (supabaseInsert: (data: any[]) => Promise<{ erro
       
       if (!error) {
         console.log(`✅ Batch ${batchNum} synced successfully`)
-        successCount += batch.length
-      } else if (error) {
+        // Track indices of successfully synced items
+        for (let j = 0; j < batch.length; j++) {
+          successfulIndices.add(i + j)
+        }
+      } else {
         console.error(`❌ Batch ${batchNum} failed:`, error.message || error)
-        failureCount += batch.length
       }
     }
 
-    if (failureCount === 0) {
+    const successCount = successfulIndices.size
+    const failureCount = queue.length - successCount
+
+    if (successCount === queue.length) {
       console.log(`✅ Successfully synced all ${successCount} offline ping(s) to Supabase`)
       clearOfflineQueue()
       return true
     } else if (successCount > 0) {
       console.warn(`⚠️ Partial sync: ${successCount} succeeded, ${failureCount} failed`)
-      // Remove successfully synced items from queue
-      const remainingQueue = queue.slice(successCount)
+      // Build new queue with only failed items
+      const remainingQueue = queue.filter((_, idx) => !successfulIndices.has(idx))
       try {
         localStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(remainingQueue))
       } catch (e) {
@@ -478,7 +482,7 @@ const flushOfflineQueue = async (supabaseInsert: (data: any[]) => Promise<{ erro
       }
       return false
     } else {
-      console.error(`❌ All batches failed to sync (${failureCount} pings)`)
+      console.error(`❌ All ${failureCount} pings failed to sync`)
       return false
     }
   } catch (err) {
