@@ -880,7 +880,22 @@ function App() {
 
   // Calculate ping statistics and experience score
   const pingStats = useMemo(() => {
-    if (mapPings.length === 0) {
+    // Filter pings based on selected carriers and status filters
+    const filteredByCarrier = mapPings.filter((ping) => {
+      // Check carrier filter
+      if (!selectedCarrierFilters.has(ping.carrier as Carrier)) {
+        return false
+      }
+      // Check status filter - if no filters selected, show all
+      if (selectedStatusFilters.size > 0) {
+        if (!selectedStatusFilters.has(ping.status as 'HIGH' | 'TIMEOUT')) {
+          return false
+        }
+      }
+      return true
+    })
+
+    if (filteredByCarrier.length === 0) {
       return {
         totalPings: 0,
         okCount: 0,
@@ -893,10 +908,10 @@ function App() {
       }
     }
 
-    const okCount = mapPings.filter(p => p.status === 'OK').length
-    const highLatencyCount = mapPings.filter(p => p.status === 'HIGH').length
-    const timedOutCount = mapPings.filter(p => p.status === 'TIMEOUT').length
-    const totalPings = mapPings.length
+    const okCount = filteredByCarrier.filter(p => p.status === 'OK').length
+    const highLatencyCount = filteredByCarrier.filter(p => p.status === 'HIGH').length
+    const timedOutCount = filteredByCarrier.filter(p => p.status === 'TIMEOUT').length
+    const totalPings = filteredByCarrier.length
 
     const okPercentage = Math.round((okCount / totalPings) * 100)
     const highLatencyPercentage = Math.round((highLatencyCount / totalPings) * 100)
@@ -920,7 +935,7 @@ function App() {
       timedOutPercentage,
       experienceScore: Math.round(experienceScore * 10) / 10,
     }
-  }, [mapPings])
+  }, [mapPings, selectedCarrierFilters, selectedStatusFilters])
 
   // Map center calculation - default to user location if available, else a fallback center
   const mapCenter = useMemo(() => {
