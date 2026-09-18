@@ -285,12 +285,20 @@ const CARRIERS = ['AT&T', 'Verizon', 'T-Mobile', 'UScellular', 'Other'] as const
 type Carrier = typeof CARRIERS[number]
 
 const normalizeCarrier = (value: unknown): Carrier => {
-  const carrier = String(value ?? '').trim().toLowerCase().replace(/[\s-]/g, '')
-
-  if (carrier === 'at&t' || carrier === 'att') return 'AT&T'
-  if (carrier === 'verizon') return 'Verizon'
-  if (carrier === 't-mobile' || carrier === 'tmobile') return 'T-Mobile'
-  if (carrier === 'uscellular' || carrier === 'uscell') return 'UScellular'
+  if (!value) return 'Other'
+  
+  const carrier = String(value)
+    .trim()
+    .toLowerCase()
+    .replace(/[\s\-_.&]/g, '')
+    .replace(/&amp;/g, '')
+  
+  if (carrier.includes('at&t') || carrier === 'att' || carrier === 'andt') return 'AT&T'
+  if (carrier.includes('verizon')) return 'Verizon'
+  if (carrier.includes('tmobile') || carrier.includes('t-mobile')) return 'T-Mobile'
+  if (carrier.includes('uscellular') || carrier.includes('uscell')) return 'UScellular'
+  if (carrier.includes('unknown')) return 'Other'
+  
   return 'Other'
 }
 
@@ -1061,10 +1069,26 @@ function App() {
       })
     }
 
+    // Skip stats if no carrier filters selected
+    if (selectedCarrierFilters.size === 0) {
+      return {
+        totalPings: 0,
+        okCount: 0,
+        highLatencyCount: 0,
+        timedOutCount: 0,
+        okPercentage: 0,
+        highLatencyPercentage: 0,
+        timedOutPercentage: 0,
+        experienceScore: 100,
+        isFiltered: mapBounds !== null,
+      }
+    }
+
     // Then filter based on carrier and status selections
     const filteredByCarrier = pingsToAnalyze.filter((ping) => {
       // Check carrier filter
-      if (!selectedCarrierFilters.has(normalizeCarrier(ping.carrier))) {
+      const normalizedCarrier = normalizeCarrier(ping.carrier)
+      if (!selectedCarrierFilters.has(normalizedCarrier)) {
         return false
       }
       // Check status filter - if no filters selected, show all
@@ -1183,10 +1207,15 @@ function App() {
   if (currentView === 'map') {
     // Filter pings based on selected carriers and status
     const filteredPings = mapPings.filter((ping) => {
+      // Skip if no carrier filters selected
+      if (selectedCarrierFilters.size === 0) return false
+      
       // Check carrier filter
-      if (!selectedCarrierFilters.has(normalizeCarrier(ping.carrier))) {
+      const normalizedCarrier = normalizeCarrier(ping.carrier)
+      if (!selectedCarrierFilters.has(normalizedCarrier)) {
         return false
       }
+      
       // Check status filter - if no filters selected, show all
       if (selectedStatusFilters.size > 0) {
         if (!selectedStatusFilters.has(ping.status as 'HIGH' | 'TIMEOUT')) {
