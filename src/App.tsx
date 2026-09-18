@@ -396,6 +396,81 @@ const getDeviceModel = (): string => {
 
 // Session and carrier management
 const ACTIVE_CARRIER_KEY = 'active_carrier'
+const OFFLINE_QUEUE_KEY = 'offline_pings'
+
+const getOfflineQueue = (): PingResult[] => {
+  try {
+    const queued = localStorage.getItem(OFFLINE_QUEUE_KEY)
+    return queued ? JSON.parse(queued) : []
+  } catch {
+    return []
+  }
+}
+
+const addToOfflineQueue = (ping: PingResult) => {
+  try {
+    const queue = getOfflineQueue()
+    queue.push(ping)
+    localStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(queue))
+    console.log(`📥 Ping queued offline (queue size: ${queue.length})`)
+  } catch (error) {
+    console.error('Failed to add to offline queue:', error)
+  }
+}
+
+const clearOfflineQueue = () => {
+  try {
+    localStorage.removeItem(OFFLINE_QUEUE_KEY)
+  } catch (error) {
+    console.error('Failed to clear offline queue:', error)
+  }
+}
+
+const flushOfflineQueue = async () => {
+  const queue = getOfflineQueue()
+  if (queue.length === 0) return true
+
+  if (!navigator.onLine) {
+    console.warn('Still offline: Cannot flush queue yet')
+    return false
+  }
+
+  console.log(`🔄 Syncing ${queue.length} offline ping(s) to Supabase...`)
+  
+  const BATCH_SIZE = 50
+  const successfulIndices = new Set<number>()
+
+  try {
+    for (let i = 0; i < queue.length; i += BATCH_SIZE) {
+      const batch = queue.slice(i, i + BATCH_SIZE)
+      const { error } = await supabase.from('pings').insert(batch).select()
+      
+      if (!error) {
+        console.log(`✅ Synced batch of ${batch.length}`)
+        for (let j = 0; j < batch.length; j++) {
+          successfulIndices.add(i + j)
+        }
+      } else {
+        console.error(`❌ Batch failed:`, error.message)
+      }
+    }
+
+    if (successfulIndices.size === queue.length) {
+      console.log(`✅ All offline pings synced`)
+      clearOfflineQueue()
+      return true
+    } else if (successfulIndices.size > 0) {
+      const remainingQueue = queue.filter((_, idx) => !successfulIndices.has(idx))
+      localStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(remainingQueue))
+      console.warn(`⚠️ Partial sync: ${successfulIndices.size} synced, ${remainingQueue.length} still queued`)
+      return false
+    }
+    return false
+  } catch (err) {
+    console.error('Exception syncing queue:', err)
+    return false
+  }
+}
 
 function App() {
   const [location, setLocation] = useState<LocationData>({
@@ -544,18 +619,20 @@ function App() {
       const { error, data } = await supabase.from('pings').insert([pingData]).select()
 
       if (error) {
-        console.error('❌ Supabase insert failed:', { code: error.code, message: error.message })
+        console.error('❌ Supabase upload failed:', { code: error.code, message: error.message })
+        addToOfflineQueue(pingData)
         return false
       }
 
       if (data && data.length > 0) {
-        console.log('✅ Ping successfully inserted to Supabase')
+        console.log('✅ Ping uploaded to Supabase')
         return true
       }
       return true
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err)
-      console.error('❌ Exception during Supabase insert:', errorMsg)
+      console.error('❌ Exception uploading ping:', errorMsg)
+      addToOfflineQueue(pingData)
       return false
     }
   }
@@ -774,8 +851,9 @@ function App() {
 
   // Handle online/offline events
   useEffect(() => {
-    const handleOnline = () => {
-      console.log('📡 Connection restored')
+    const handleOnline = async () => {
+      console.log('📡 Connection restored, syncing offline queue...')
+      await flushOfflineQueue()
     }
 
     const handleOffline = () => {
@@ -788,6 +866,17 @@ function App() {
     return () => {
       window.removeEventListener('online', handleOnline)
       window.removeEventListener('offline', handleOffline)
+    }
+  }, [])
+
+  // Sync any existing offline queue on mount
+  useEffect(() => {
+    const queue = getOfflineQueue()
+    if (queue.length > 0) {
+      console.log(`📥 Found ${queue.length} queued pings from previous session`)
+      if (navigator.onLine) {
+        flushOfflineQueue()
+      }
     }
   }, [])
 
