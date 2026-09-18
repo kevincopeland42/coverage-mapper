@@ -638,18 +638,18 @@ function App() {
   const recordPingToSupabase = async (pingData: PingResult) => {
     // Check if online first
     if (!navigator.onLine) {
-      console.warn('Device offline: Queueing ping to localStorage')
+      console.warn('🔴 Device offline (navigator.onLine=false): Queueing ping to localStorage')
       addToOfflineQueue(pingData)
       return false
     }
 
     try {
+      console.log('📤 Attempting Supabase insert for ping:', pingData.carrier, pingData.status)
       const { error } = await supabase.from('pings').insert([pingData])
 
       if (error) {
-        console.error('Supabase insert error:', error.message, error)
-        // Queue to localStorage on Supabase failure
-        console.warn('Queueing ping to localStorage due to Supabase error')
+        console.error('❌ Supabase insert error:', error.code, error.message, error)
+        console.warn('📥 Queueing ping to localStorage due to Supabase error')
         addToOfflineQueue(pingData)
         return false
       }
@@ -659,14 +659,11 @@ function App() {
     } catch (err) {
       // Network or other exception during Supabase call
       const errorMsg = err instanceof Error ? err.message : String(err)
-      console.error('Exception during Supabase insert:', errorMsg)
-      // Queue to localStorage on exception
-      console.warn('Queueing ping to localStorage due to exception')
+      console.error('❌ Exception during Supabase insert:', errorMsg, err)
+      console.warn('📥 Queueing ping to localStorage due to exception')
       addToOfflineQueue(pingData)
       return false
     }
-
-    return false
   }
 
   // Request wake lock
