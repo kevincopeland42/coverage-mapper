@@ -934,6 +934,12 @@ function App() {
     if (!isTracking) {
       // Start tracking
       setIsTracking(true)
+      
+      // Auto-select current activeCarrier in map filters so pings are visible
+      const newFilters = new Set(selectedCarrierFilters)
+      newFilters.add(activeCarrier)
+      setSelectedCarrierFilters(newFilters)
+      
       await requestWakeLock()
 
       // Perform initial ping immediately
