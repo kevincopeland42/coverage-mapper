@@ -464,7 +464,6 @@ function App() {
   const [offlineQueueSize, setOfflineQueueSize] = useState(0) // Track offline queue size for UI
   const [isMapFollowing, setIsMapFollowing] = useState(false) // Track if map is in following mode
   const [mapBounds, setMapBounds] = useState<MapBounds | null>(null) // Track visible map bounds for stats filtering
-  const [showMapPins, setShowMapPins] = useState(false) // Toggle to show/hide pins on map for performance
   
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const wakeLockRef = useRef<WakeLockSentinel | null>(null)
@@ -1198,25 +1197,6 @@ function App() {
                 {filteredPings.length} / {mapPings.length} pings
               </span>
 
-              {/* Toggle Pins Button */}
-              <button
-                onClick={() => setShowMapPins(!showMapPins)}
-                style={{
-                  padding: '8px 12px',
-                  backgroundColor: showMapPins ? '#4CAF50' : '#ccc',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: '5px',
-                  cursor: 'pointer',
-                  fontSize: '13px',
-                  fontWeight: 'bold',
-                  transition: 'all 0.2s',
-                }}
-                title={showMapPins ? 'Click to hide pins (faster map)' : 'Click to show pins on map'}
-              >
-                {showMapPins ? '📌 Pins ON' : '📌 Pins OFF'}
-              </button>
-
               {/* Experience Score Badge */}
               {pingStats.totalPings > 0 && (
                 <div
@@ -1547,8 +1527,8 @@ function App() {
                 </Marker>
               )}
 
-              {/* Ping markers */}
-              {showMapPins && filteredPings
+              {/* Ping markers - show only when carriers are selected */}
+              {selectedCarrierFilters.size > 0 && filteredPings
                 .filter(
                   (ping) =>
                     ping.latitude !== null &&
@@ -1693,10 +1673,7 @@ function App() {
             Live Tracker
           </button>
           <button
-            onClick={() => {
-              setCurrentView('map')
-              setShowMapPins(false) // Disable pins by default for fast loading
-            }}
+            onClick={() => setCurrentView('map')}
             style={{
               padding: '10px 20px',
               backgroundColor: (currentView as string) === 'map' ? '#2196F3' : '#ddd',
