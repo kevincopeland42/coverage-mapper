@@ -420,15 +420,47 @@ const flushOfflineQueue = async (supabaseInsert: (data: any[]) => Promise<{ erro
   }
 
   console.log(`🔄 Syncing ${queue.length} offline ping(s) to Supabase...`)
+  
+  // Process queue in chunks of 50 to avoid timeout/limit issues
+  const BATCH_SIZE = 50
+  let successCount = 0
+  let failureCount = 0
+  const totalBatches = Math.ceil(queue.length / BATCH_SIZE)
+
   try {
-    const { error, data } = await supabaseInsert(queue)
-    
-    if (!error && data) {
-      console.log(`✅ Successfully synced ${queue.length} offline ping(s) to Supabase`)
+    for (let i = 0; i < queue.length; i += BATCH_SIZE) {
+      const batch = queue.slice(i, i + BATCH_SIZE)
+      const batchNum = Math.floor(i / BATCH_SIZE) + 1
+      
+      console.log(`🔄 Batch ${batchNum}/${totalBatches}: Syncing ${batch.length} pings...`)
+      
+      const { error, data } = await supabaseInsert(batch)
+      
+      if (!error && data) {
+        console.log(`✅ Batch ${batchNum} synced successfully`)
+        successCount += batch.length
+      } else if (error) {
+        console.error(`❌ Batch ${batchNum} failed:`, error.message || error)
+        failureCount += batch.length
+      }
+    }
+
+    if (failureCount === 0) {
+      console.log(`✅ Successfully synced all ${successCount} offline ping(s) to Supabase`)
       clearOfflineQueue()
       return true
-    } else if (error) {
-      console.error('❌ Error syncing offline queue:', error.message || error)
+    } else if (successCount > 0) {
+      console.warn(`⚠️ Partial sync: ${successCount} succeeded, ${failureCount} failed`)
+      // Remove successfully synced items from queue
+      const remainingQueue = queue.slice(successCount)
+      try {
+        localStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(remainingQueue))
+      } catch (e) {
+        console.error('Failed to update queue after partial sync:', e)
+      }
+      return false
+    } else {
+      console.error(`❌ All batches failed to sync (${failureCount} pings)`)
       return false
     }
   } catch (err) {
@@ -436,7 +468,6 @@ const flushOfflineQueue = async (supabaseInsert: (data: any[]) => Promise<{ erro
     console.error('❌ Exception syncing offline queue:', errorMsg)
     return false
   }
-  return false
 }
 
 function App() {
@@ -1228,20 +1259,51 @@ function App() {
               {offlineQueueSize > 0 && (
                 <div
                   style={{
-                    padding: '8px 12px',
-                    backgroundColor: '#ff9800',
-                    color: 'white',
-                    borderRadius: '20px',
-                    fontSize: '13px',
-                    fontWeight: 'bold',
                     display: 'flex',
+                    gap: '8px',
                     alignItems: 'center',
-                    gap: '6px',
-                    boxShadow: '0 2px 4px rgba(0,0,0,0.2)',
                   }}
                 >
-                  <span>⏳</span>
-                  <span>{offlineQueueSize} pending</span>
+                  <div
+                    style={{
+                      padding: '8px 12px',
+                      backgroundColor: '#ff9800',
+                      color: 'white',
+                      borderRadius: '20px',
+                      fontSize: '13px',
+                      fontWeight: 'bold',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      boxShadow: '0 2px 4px rgba(0,0,0,0.2)',
+                    }}
+                  >
+                    <span>⏳</span>
+                    <span>{offlineQueueSize} pending</span>
+                  </div>
+                  <button
+                    onClick={() => {
+                      if (confirm(`Clear ${offlineQueueSize} pending pings? This cannot be undone.`)) {
+                        clearOfflineQueue()
+                        setOfflineQueueSize(0)
+                        console.log('✅ Offline queue manually cleared')
+                      }
+                    }}
+                    style={{
+                      padding: '8px 12px',
+                      backgroundColor: '#f44336',
+                      color: 'white',
+                      borderRadius: '20px',
+                      fontSize: '12px',
+                      fontWeight: 'bold',
+                      border: 'none',
+                      cursor: 'pointer',
+                      boxShadow: '0 2px 4px rgba(0,0,0,0.2)',
+                    }}
+                    title="Clear the offline queue - use only if queue is stuck"
+                  >
+                    🗑️ Clear
+                  </button>
                 </div>
               )}
 
@@ -1690,23 +1752,48 @@ function App() {
           {/* Offline Queue Status Indicator */}
           <div style={{ marginLeft: 'auto', display: 'flex', gap: '10px', alignItems: 'center' }}>
             {offlineQueueSize > 0 && (
-              <div
-                style={{
-                  padding: '8px 12px',
-                  backgroundColor: '#ff9800',
-                  color: 'white',
-                  borderRadius: '20px',
-                  fontSize: '13px',
-                  fontWeight: 'bold',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                  boxShadow: '0 2px 4px rgba(0,0,0,0.2)',
-                }}
-              >
-                <span>⏳</span>
-                <span>{offlineQueueSize} pending</span>
-              </div>
+              <>
+                <div
+                  style={{
+                    padding: '8px 12px',
+                    backgroundColor: '#ff9800',
+                    color: 'white',
+                    borderRadius: '20px',
+                    fontSize: '13px',
+                    fontWeight: 'bold',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    boxShadow: '0 2px 4px rgba(0,0,0,0.2)',
+                  }}
+                >
+                  <span>⏳</span>
+                  <span>{offlineQueueSize} pending</span>
+                </div>
+                <button
+                  onClick={() => {
+                    if (confirm(`Clear ${offlineQueueSize} pending pings? This cannot be undone.`)) {
+                      clearOfflineQueue()
+                      setOfflineQueueSize(0)
+                      console.log('✅ Offline queue manually cleared')
+                    }
+                  }}
+                  style={{
+                    padding: '8px 12px',
+                    backgroundColor: '#f44336',
+                    color: 'white',
+                    borderRadius: '20px',
+                    fontSize: '12px',
+                    fontWeight: 'bold',
+                    border: 'none',
+                    cursor: 'pointer',
+                    boxShadow: '0 2px 4px rgba(0,0,0,0.2)',
+                  }}
+                  title="Clear the offline queue - use only if queue is stuck"
+                >
+                  🗑️ Clear
+                </button>
+              </>
             )}
 
             {!navigator.onLine && (
