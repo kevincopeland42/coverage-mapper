@@ -91,22 +91,91 @@ interface RecenterButtonProps {
   mapPings: PingResult[]
   location: LocationData
   containerRef?: React.RefObject<HTMLDivElement | null>
+  isFollowing: boolean
+  setIsFollowing: (value: boolean) => void
 }
 
-const RecenterButton = ({ mapPings, location, containerRef }: RecenterButtonProps) => {
+const RecenterButton = ({ mapPings, location, containerRef, isFollowing, setIsFollowing }: RecenterButtonProps) => {
   const map = useMap()
+  const followingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  // Start or stop following mode
+  useEffect(() => {
+    if (isFollowing && map) {
+      // Start following the latest ping
+      followingIntervalRef.current = setInterval(() => {
+        if (mapPings.length > 0) {
+          const latestPing = mapPings[mapPings.length - 1]
+          if (latestPing.latitude && latestPing.longitude) {
+            const currentCenter = map.getCenter()
+            // Only fly to if we've moved significantly
+            const distance = currentCenter.distanceTo([latestPing.latitude, latestPing.longitude])
+            if (distance > 50) { // 50 meters threshold
+              map.flyTo([latestPing.latitude, latestPing.longitude], 15, { duration: 0.3, noMoveStart: true })
+            }
+          }
+        }
+      }, 1000)
+    } else {
+      // Stop following
+      if (followingIntervalRef.current) {
+        clearInterval(followingIntervalRef.current)
+        followingIntervalRef.current = null
+      }
+    }
+
+    return () => {
+      if (followingIntervalRef.current) {
+        clearInterval(followingIntervalRef.current)
+      }
+    }
+  }, [isFollowing, mapPings, map])
+
+  // Stop following when user manually interacts with map
+  useEffect(() => {
+    if (!map) return
+
+    const handleMapMove = () => {
+      if (isFollowing) {
+        setIsFollowing(false)
+      }
+    }
+
+    const handleMapZoom = () => {
+      if (isFollowing) {
+        setIsFollowing(false)
+      }
+    }
+
+    map.on('move', handleMapMove)
+    map.on('zoom', handleMapZoom)
+
+    return () => {
+      map.off('move', handleMapMove)
+      map.off('zoom', handleMapZoom)
+    }
+  }, [map, isFollowing, setIsFollowing])
 
   const handleRecenter = () => {
     if (!map) return
 
-    // Snap to latest ping or current location
-    if (mapPings.length > 0) {
-      const latestPing = mapPings[mapPings.length - 1]
-      if (latestPing.latitude && latestPing.longitude) {
-        map.flyTo([latestPing.latitude, latestPing.longitude], 15, { duration: 0.5 })
+    // Toggle following mode or snap to location
+    if (isFollowing) {
+      // Already following, click again to stop
+      setIsFollowing(false)
+    } else {
+      // Not following, enable it
+      setIsFollowing(true)
+
+      // Initial snap to latest ping or current location
+      if (mapPings.length > 0) {
+        const latestPing = mapPings[mapPings.length - 1]
+        if (latestPing.latitude && latestPing.longitude) {
+          map.flyTo([latestPing.latitude, latestPing.longitude], 15, { duration: 0.5 })
+        }
+      } else if (location.latitude && location.longitude) {
+        map.flyTo([location.latitude, location.longitude], 15, { duration: 0.5 })
       }
-    } else if (location.latitude && location.longitude) {
-      map.flyTo([location.latitude, location.longitude], 15, { duration: 0.5 })
     }
   }
 
@@ -119,7 +188,7 @@ const RecenterButton = ({ mapPings, location, containerRef }: RecenterButtonProp
         right: '20px',
         zIndex: 500,
         padding: '12px 16px',
-        backgroundColor: '#2196F3',
+        backgroundColor: isFollowing ? '#ff9800' : '#2196F3',
         color: 'white',
         border: 'none',
         borderRadius: '50px',
@@ -127,7 +196,7 @@ const RecenterButton = ({ mapPings, location, containerRef }: RecenterButtonProp
         fontSize: '14px',
         fontWeight: 'bold',
         boxShadow: '0 2px 8px rgba(0,0,0,0.3)',
-        transition: 'transform 0.2s',
+        transition: 'all 0.2s',
       }}
       onMouseEnter={(e) => {
         (e.target as HTMLButtonElement).style.transform = 'scale(1.05)'
@@ -135,9 +204,9 @@ const RecenterButton = ({ mapPings, location, containerRef }: RecenterButtonProp
       onMouseLeave={(e) => {
         (e.target as HTMLButtonElement).style.transform = 'scale(1)'
       }}
-      title="Recenter map on latest ping or current location"
+      title={isFollowing ? 'Stop following - Click to stop or manually move map' : 'Start following - Map will follow your marker'}
     >
-      📍 Recenter
+      {isFollowing ? '🎯 Following' : '📍 Recenter'}
     </button>
   )
 
@@ -194,6 +263,7 @@ const getDeviceModel = (): string => {
 
 // Offline queue management
 const OFFLINE_QUEUE_KEY = 'offline_pings'
+const ACTIVE_CARRIER_KEY = 'active_carrier'
 
 const getOfflineQueue = (): PingResult[] => {
   try {
@@ -266,10 +336,18 @@ function App() {
   const [pocketSlidePosition, setPocketSlidePosition] = useState(0)
   const [currentView, setCurrentView] = useState<'tracker' | 'map'>('tracker')
   const [mapPings, setMapPings] = useState<PingResult[]>([])
-  const [activeCarrier, setActiveCarrier] = useState<Carrier>('Other')
+  const [activeCarrier, setActiveCarrier] = useState<Carrier>(() => {
+    try {
+      const saved = localStorage.getItem(ACTIVE_CARRIER_KEY)
+      return (saved as Carrier) || 'Other'
+    } catch {
+      return 'Other'
+    }
+  })
   const [selectedCarrierFilters, setSelectedCarrierFilters] = useState<Set<Carrier>>(new Set(CARRIERS))
-  const [statusFilter, setStatusFilter] = useState<'All' | 'High Latency' | 'Timed-out'>('All')
+  const [selectedStatusFilters, setSelectedStatusFilters] = useState<Set<'HIGH' | 'TIMEOUT'>>(new Set())
   const [offlineQueueSize, setOfflineQueueSize] = useState(0) // Track offline queue size for UI
+  const [isMapFollowing, setIsMapFollowing] = useState(false) // Track if map is in following mode
   
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const wakeLockRef = useRef<WakeLockSentinel | null>(null)
@@ -514,9 +592,16 @@ function App() {
             return supabase.from('pings').insert(data)
           })
           if (success) {
+            console.log('✅ Offline queue cleared successfully')
             setOfflineQueueSize(0)
+          } else {
+            const queueSize = getOfflineQueue().length
+            setOfflineQueueSize(queueSize)
           }
         }, 500)
+      } else if (recordedToSupabase) {
+        // Successfully recorded and no queue left
+        setOfflineQueueSize(0)
       }
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error)
@@ -651,7 +736,12 @@ function App() {
           return supabase.from('pings').insert(data)
         })
         if (success) {
+          console.log('✅ Offline queue cleared successfully')
           setOfflineQueueSize(0)
+        } else {
+          // Update UI with current queue size
+          const queueSize = getOfflineQueue().length
+          setOfflineQueueSize(queueSize)
         }
       }, 1000)
     }
@@ -665,10 +755,16 @@ function App() {
 
     // Attempt to flush queue on component mount if online
     if (navigator.onLine) {
-      setTimeout(() => {
-        flushOfflineQueue(async (data) => {
+      setTimeout(async () => {
+        const success = await flushOfflineQueue(async (data) => {
           return supabase.from('pings').insert(data)
         })
+        if (success) {
+          setOfflineQueueSize(0)
+        } else {
+          const queueSize = getOfflineQueue().length
+          setOfflineQueueSize(queueSize)
+        }
       }, 2000)
     }
 
@@ -697,6 +793,15 @@ function App() {
   useEffect(() => {
     latestCoordsRef.current = location
   }, [location])
+
+  // Persist active carrier selection
+  useEffect(() => {
+    try {
+      localStorage.setItem(ACTIVE_CARRIER_KEY, activeCarrier)
+    } catch (error) {
+      console.error('Failed to persist carrier selection:', error)
+    }
+  }, [activeCarrier])
 
   // Handle tracking toggle
   const handleToggleTracking = async () => {
@@ -840,12 +945,11 @@ function App() {
       if (!selectedCarrierFilters.has(ping.carrier as Carrier)) {
         return false
       }
-      // Check status filter
-      if (statusFilter === 'High Latency' && ping.status !== 'HIGH') {
-        return false
-      }
-      if (statusFilter === 'Timed-out' && ping.status !== 'TIMEOUT') {
-        return false
+      // Check status filter - if no filters selected, show all
+      if (selectedStatusFilters.size > 0) {
+        if (!selectedStatusFilters.has(ping.status as 'HIGH' | 'TIMEOUT')) {
+          return false
+        }
       }
       return true
     })
@@ -963,25 +1067,53 @@ function App() {
             {/* Status Filter */}
             <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center', marginBottom: '10px' }}>
               <span style={{ fontSize: '14px', fontWeight: 'bold', color: '#333' }}>Status:</span>
-              {['All', 'High Latency', 'Timed-out'].map((status) => (
+              {[
+                { label: 'High Latency', value: 'HIGH' as const },
+                { label: 'Timed-out', value: 'TIMEOUT' as const },
+              ].map((status) => (
                 <button
-                  key={status}
-                  onClick={() => setStatusFilter(status as 'All' | 'High Latency' | 'Timed-out')}
+                  key={status.value}
+                  onClick={() => {
+                    const newFilters = new Set(selectedStatusFilters)
+                    if (newFilters.has(status.value)) {
+                      newFilters.delete(status.value)
+                    } else {
+                      newFilters.add(status.value)
+                    }
+                    setSelectedStatusFilters(newFilters)
+                  }}
                   style={{
                     padding: '6px 12px',
                     borderRadius: '20px',
-                    border: statusFilter === status ? '2px solid #FF6B6B' : '1px solid #ccc',
-                    backgroundColor: statusFilter === status ? '#ffe3e3' : 'white',
-                    color: statusFilter === status ? '#FF6B6B' : '#666',
+                    border: selectedStatusFilters.has(status.value) ? '2px solid #FF6B6B' : '1px solid #ccc',
+                    backgroundColor: selectedStatusFilters.has(status.value) ? '#ffe3e3' : 'white',
+                    color: selectedStatusFilters.has(status.value) ? '#FF6B6B' : '#666',
                     cursor: 'pointer',
                     fontSize: '13px',
-                    fontWeight: statusFilter === status ? 'bold' : 'normal',
+                    fontWeight: selectedStatusFilters.has(status.value) ? 'bold' : 'normal',
                     transition: 'all 0.2s',
                   }}
                 >
-                  {status}
+                  {status.label}
                 </button>
               ))}
+              {selectedStatusFilters.size > 0 && (
+                <button
+                  onClick={() => setSelectedStatusFilters(new Set())}
+                  style={{
+                    padding: '6px 12px',
+                    borderRadius: '20px',
+                    border: '1px solid #999',
+                    backgroundColor: 'white',
+                    color: '#333',
+                    cursor: 'pointer',
+                    fontSize: '12px',
+                    marginLeft: '4px',
+                  }}
+                >
+                  Clear Status
+                </button>
+              )}
             </div>
 
             {/* Filter Chips */}
@@ -1017,7 +1149,7 @@ function App() {
               <button
                 onClick={() => {
                   setSelectedCarrierFilters(new Set(CARRIERS))
-                  setStatusFilter('All')
+                  setSelectedStatusFilters(new Set())
                 }}
                 style={{
                   padding: '6px 12px',
@@ -1053,7 +1185,13 @@ function App() {
                   attribution='&copy; OpenStreetMap contributors'
                 />
                 <MapRecenter mapPings={mapPings} location={location} />
-                <RecenterButton mapPings={mapPings} location={location} containerRef={mapContainerRef} />
+                <RecenterButton 
+                  mapPings={mapPings} 
+                  location={location} 
+                  containerRef={mapContainerRef}
+                  isFollowing={isMapFollowing}
+                  setIsFollowing={setIsMapFollowing}
+                />
 
               {/* Current location marker */}
               {location.latitude && location.longitude && (
